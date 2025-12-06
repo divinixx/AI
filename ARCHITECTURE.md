@@ -198,7 +198,7 @@ AI/
 | `CARTOON` | Classic cartoon effect with edge detection |
 | `SKETCH` | Pencil sketch (black & white) |
 | `COLOR_PENCIL` | Colored pencil drawing effect |
-| `OIL_PAINTING` | Oil painting stylization |
+| `OIL_PAINTING` | Oil painting wuylization |
 | `WATERCOLOR` | Watercolor paint effect |
 | `POP_ART` | Andy Warhol-style pop art |
 
