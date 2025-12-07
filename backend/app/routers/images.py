@@ -1,254 +1,341 @@
 """
-Images router.
-Handles image upload, transformation, and job management endpoints.
+Image processing routes
 """
-
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 from typing import Optional
-import os
 
-from app.db import get_db
-from app.config import settings
-from app.models.user import User
-from app.models.image_job import ImageStyle
+from app.database import get_db
 from app.schemas.image import (
     ImageStyleEnum,
+    ImageProcessRequest,
     ImageJobResponse,
-    ImageJobListResponse,
-    ImageJobFilter
+    ImageJobDetailResponse,
+    ImageUploadResponse,
+    ImageListResponse,
+    StyleInfo,
+    StylesListResponse,
 )
-from app.services.image_job import ImageJobService
-from app.routers.users import get_current_user
+from app.services.image_service import image_service
+from app.image_processing.processor import ImageProcessor
+from app.core.security import get_current_user
+from app.models.user import User
+from app.models.image_job import JobStatus
+import os
 
-router = APIRouter()
+router = APIRouter(prefix="/images", tags=["Images"])
 
-
-def job_to_response(job, base_url: str = "") -> ImageJobResponse:
-    """Convert ImageJob model to response schema."""
-    return ImageJobResponse(
-        id=job.id,
-        uuid=job.uuid,
-        original_filename=job.original_filename,
-        style=ImageStyleEnum(job.style.value),
-        status=job.status.value,
-        params_json=job.params_json,
-        original_url=f"{base_url}/images/{job.uuid}/original" if job.original_path else None,
-        output_url=f"{base_url}/images/{job.uuid}/processed" if job.output_path else None,
-        is_hd_unlocked=job.is_hd_unlocked == "Y",
-        error_message=job.error_message,
-        created_at=job.created_at,
-        processed_at=job.processed_at
-    )
+# Style descriptions
+STYLE_DESCRIPTIONS = {
+    ImageStyleEnum.CARTOON: "Classic cartoon effect with bold edges and flat colors",
+    ImageStyleEnum.PENCIL_SKETCH: "Grayscale pencil sketch drawing effect",
+    ImageStyleEnum.COLOR_PENCIL: "Colored pencil artistic stylization",
+    ImageStyleEnum.EDGE_PRESERVE: "Edge-preserving smooth effect with enhanced details",
+    ImageStyleEnum.WATERCOLOR: "Soft watercolor painting effect",
+}
 
 
-@router.post("/transform", response_model=ImageJobResponse, status_code=status.HTTP_201_CREATED)
-async def transform_image(
-    file: UploadFile = File(..., description="Image file to transform"),
-    style: ImageStyleEnum = Query(..., description="Cartoon style to apply"),
-    params: Optional[str] = Query(None, description="JSON string of style parameters"),
+@router.get("/styles", response_model=StylesListResponse)
+async def get_available_styles():
+    """
+    Get list of available image transformation styles
+    """
+    styles = [
+        StyleInfo(
+            name=style.value.replace("_", " ").title(),
+            value=style.value,
+            description=STYLE_DESCRIPTIONS.get(style, "")
+        )
+        for style in ImageStyleEnum
+    ]
+    return StylesListResponse(styles=styles)
+
+
+@router.post("/upload", response_model=ImageUploadResponse)
+async def upload_image(
+    file: UploadFile = File(...),
+    style: ImageStyleEnum = ImageStyleEnum.CARTOON,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     """
-    Upload an image and create a transformation job.
+    Upload an image for processing
     
-    - **file**: Image file (JPG, PNG, WEBP)
-    - **style**: Transformation style (cartoon, sketch, color_pencil, etc.)
-    - **params**: Optional JSON string with style-specific parameters
-    
-    Returns the created job with status and preview URLs.
+    - **file**: Image file (jpg, jpeg, png, webp)
+    - **style**: Transformation style to apply
     """
-    import json
+    # Validate file
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File must be an image"
+        )
     
-    # Parse params if provided
-    params_dict = None
-    if params:
-        try:
-            params_dict = json.loads(params)
-        except json.JSONDecodeError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid params JSON format"
-            )
-    
-    # Save uploaded file
-    upload_path = ImageJobService.generate_file_path(
-        file.filename,
-        settings.UPLOAD_DIR
-    )
-    await ImageJobService.save_upload_file(file, upload_path)
+    # Save file
+    filename, file_path = image_service.save_uploaded_file(file, current_user.id)
     
     # Create job
-    job = await ImageJobService.create_job(
+    job = image_service.create_image_job(
         db=db,
         user_id=current_user.id,
         original_filename=file.filename,
-        original_path=upload_path,
-        style=ImageStyle(style.value),
-        params_json=params_dict
+        original_path=file_path,
+        style=style
     )
     
-    # Process immediately (sync for now, could be background task)
-    job = await ImageJobService.process_job(db, job)
-    
-    return job_to_response(job)
+    return ImageUploadResponse(
+        job_id=job.id,
+        message="Image uploaded successfully",
+        original_url=f"/images/file/{job.id}/original"
+    )
 
 
-@router.get("", response_model=ImageJobListResponse)
-async def list_jobs(
-    page: int = Query(1, ge=1, description="Page number"),
-    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
-    style: Optional[ImageStyleEnum] = Query(None, description="Filter by style"),
-    status: Optional[str] = Query(None, description="Filter by status"),
+@router.post("/{job_id}/process", response_model=ImageJobResponse)
+async def process_image(
+    job_id: int,
+    background_tasks: BackgroundTasks,
+    style: Optional[ImageStyleEnum] = None,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     """
-    List all image jobs for the current user.
+    Start processing an uploaded image
     
-    Supports pagination and filtering by style/status.
+    - **job_id**: ID of the upload job
+    - **style**: Optional new style (overrides upload style)
     """
-    filters = ImageJobFilter(
-        style=style,
-        status=status
-    ) if style or status else None
+    job = image_service.get_job_by_id(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image job not found"
+        )
     
-    jobs, total = await ImageJobService.get_user_jobs(
+    if job.status == JobStatus.PROCESSING.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Image is already being processed"
+        )
+    
+    # Update style if provided
+    if style:
+        job.style = style.value
+        db.commit()
+    
+    # Process in background
+    background_tasks.add_task(
+        process_image_task,
+        db_url=str(db.bind.url),
+        job_id=job.id
+    )
+    
+    # Update status to processing
+    image_service.update_job_status(db, job, JobStatus.PROCESSING)
+    
+    return ImageJobResponse.model_validate(job)
+
+
+def process_image_task(db_url: str, job_id: int):
+    """Background task for image processing"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.models.image_job import ImageJob
+    
+    engine = create_engine(db_url)
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+    
+    try:
+        job = db.query(ImageJob).filter(ImageJob.id == job_id).first()
+        if not job:
+            return
+        
+        processor = ImageProcessor()
+        
+        # Process image
+        processed_path, comparison_path = processor.process_image(
+            input_path=job.original_path,
+            style=job.style
+        )
+        
+        # Update job with results
+        job.processed_path = processed_path
+        job.comparison_path = comparison_path
+        job.status = JobStatus.COMPLETED.value
+        from datetime import datetime
+        job.processed_at = datetime.utcnow()
+        db.commit()
+        
+    except Exception as e:
+        job.status = JobStatus.FAILED.value
+        job.error_message = str(e)
+        db.commit()
+    finally:
+        db.close()
+
+
+@router.get("/{job_id}", response_model=ImageJobDetailResponse)
+async def get_image_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get details of an image processing job
+    """
+    job = image_service.get_job_by_id(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Image job not found"
+        )
+    
+    return ImageJobDetailResponse(
+        id=job.id,
+        original_filename=job.original_filename,
+        style=job.style,
+        status=job.status,
+        created_at=job.created_at,
+        processed_at=job.processed_at,
+        error_message=job.error_message,
+        original_url=f"/images/file/{job.id}/original",
+        processed_url=f"/images/file/{job.id}/processed" if job.processed_path else None,
+        comparison_url=f"/images/file/{job.id}/comparison" if job.comparison_path else None,
+        download_count=job.download_count
+    )
+
+
+@router.get("/", response_model=ImageListResponse)
+async def list_image_jobs(
+    page: int = 1,
+    per_page: int = 10,
+    status: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    List all image jobs for current user
+    
+    - **page**: Page number (default 1)
+    - **per_page**: Items per page (default 10)
+    - **status**: Filter by status (pending, processing, completed, failed)
+    """
+    jobs, total = image_service.get_user_jobs(
         db=db,
         user_id=current_user.id,
-        filters=filters,
         page=page,
-        page_size=page_size
+        per_page=per_page,
+        status_filter=status
     )
     
-    total_pages = (total + page_size - 1) // page_size
-    
-    return ImageJobListResponse(
-        items=[job_to_response(job) for job in jobs],
+    return ImageListResponse(
+        jobs=[ImageJobResponse.model_validate(job) for job in jobs],
         total=total,
         page=page,
-        page_size=page_size,
-        total_pages=total_pages
+        per_page=per_page
     )
 
 
-@router.get("/{job_uuid}", response_model=ImageJobResponse)
-async def get_job(
-    job_uuid: str,
+@router.get("/file/{job_id}/{file_type}")
+async def get_image_file(
+    job_id: int,
+    file_type: str,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     """
-    Get details of a specific image job.
+    Get image file (original, processed, or comparison)
     
-    - **job_uuid**: UUID of the job
+    - **file_type**: original, processed, or comparison
     """
-    job = await ImageJobService.get_job_by_uuid(db, job_uuid, current_user.id)
-    
+    job = image_service.get_job_by_id(db, job_id, current_user.id)
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found"
+            detail="Image job not found"
         )
     
-    return job_to_response(job)
+    if file_type == "original":
+        file_path = job.original_path
+    elif file_type == "processed":
+        file_path = job.processed_path
+    elif file_type == "comparison":
+        file_path = job.comparison_path
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file type"
+        )
+    
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found"
+        )
+    
+    return FileResponse(file_path)
 
 
-@router.get("/{job_uuid}/original")
-async def get_original_image(
-    job_uuid: str,
+@router.get("/download/{job_id}")
+async def download_processed_image(
+    job_id: int,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     """
-    Download the original uploaded image.
+    Download processed image
     """
-    job = await ImageJobService.get_job_by_uuid(db, job_uuid, current_user.id)
-    
+    job = image_service.get_job_by_id(db, job_id, current_user.id)
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found"
+            detail="Image job not found"
         )
     
-    if not job.original_path or not os.path.exists(job.original_path):
+    if job.status != JobStatus.COMPLETED.value:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Original image not found"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Image processing not completed"
         )
     
-    return FileResponse(
-        job.original_path,
-        filename=job.original_filename,
-        media_type="image/jpeg"
-    )
-
-
-@router.get("/{job_uuid}/processed")
-async def get_processed_image(
-    job_uuid: str,
-    hd: bool = Query(False, description="Request HD quality"),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Download the processed/transformed image.
-    
-    - **hd**: If true, returns HD quality (requires payment)
-    """
-    job = await ImageJobService.get_job_by_uuid(db, job_uuid, current_user.id)
-    
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found"
-        )
-    
-    if not job.output_path or not os.path.exists(job.output_path):
+    if not job.processed_path or not os.path.exists(job.processed_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Processed image not found"
         )
     
-    # Check HD access
-    if hd and job.is_hd_unlocked != "Y":
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="HD download requires payment"
-        )
+    # Increment download count
+    image_service.increment_download_count(db, job)
+    
+    # Generate download filename
+    original_name = os.path.splitext(job.original_filename)[0]
+    ext = os.path.splitext(job.processed_path)[1]
+    download_filename = f"{original_name}_toonified{ext}"
     
     return FileResponse(
-        job.output_path,
-        filename=f"processed_{job.original_filename}",
-        media_type="image/jpeg"
+        job.processed_path,
+        filename=download_filename,
+        media_type="image/png"
     )
 
 
-@router.delete("/{job_uuid}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_job(
-    job_uuid: str,
+@router.delete("/{job_id}", response_model=dict)
+async def delete_image_job(
+    job_id: int,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     """
-    Delete an image job and its associated files.
-    
-    - **job_uuid**: UUID of the job to delete
+    Delete an image job and associated files
     """
-    job = await ImageJobService.get_job_by_uuid(db, job_uuid, current_user.id)
-    
+    job = image_service.get_job_by_id(db, job_id, current_user.id)
     if not job:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Job not found"
+            detail="Image job not found"
         )
     
-    success = await ImageJobService.delete_job(db, job)
+    image_service.delete_job(db, job)
     
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to delete job"
-        )
+    return {"message": "Image job deleted successfully"}

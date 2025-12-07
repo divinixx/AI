@@ -1,1 +1,1 @@
-# AI Image Transformation Backend Application
+# Backend App Package

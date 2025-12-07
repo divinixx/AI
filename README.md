@@ -1,271 +1,297 @@
-# AI-Based Image Transformation Tool for Cartoon Effect Generation
+📌 Detailed Project Prompt (Industry-Level Specification)
+Project: AI-Based Image Transformation Tool for Cartoon Effect Generation — “Toonify”
+1. Project Overview
 
-An end-to-end full-stack project using FastAPI, PostgreSQL, OpenCV, and Streamlit.
+Build a full-stack, production-ready AI Image Transformation Platform that converts user-uploaded images into cartoon-style outputs using OpenCV.
+The system must include:
 
-## Overview
+Streamlit frontend for user interaction and visualization
 
-This project is a web-based application that transforms user-uploaded photos into various cartoon-style effects such as classic cartoon, pencil sketch, and color pencil effects using OpenCV image processing pipelines. The system follows a service-oriented architecture with a FastAPI backend exposing REST APIs, a PostgreSQL database for persistence, and a Streamlit frontend that acts as a lightweight UI client consuming the backend APIs. Users can create accounts, upload images, preview different cartoon styles, view their history, and optionally unlock high-resolution downloads via a payment flow.
+FastAPI backend for authentication, processing, and database operations
 
-## Features
+PostgreSQL database for user & transaction management
 
-- User registration and login with secure password hashing and JWT-based authentication.  
-- Image upload and selection of different cartoon transformation styles and parameters.  
-- OpenCV-based image transformation pipeline with multiple effects (cartoon, sketch, color pencil, etc.).  
-- Side-by-side preview of original and transformed images.  
-- User-specific gallery/history of processed images.  
-- Optional payment integration to unlock high-resolution downloads.  
-- Dashboard with basic usage statistics and charts.
-
-## Architecture
+Secure payments (Razorpay/Stripe) before image download
 
-The application is structured as three main components:
+Modular, scalable architecture suitable for industry deployment
 
-1. FastAPI backend  
-2. PostgreSQL database  
-3. Streamlit frontend
-
-The frontend never interacts with the database directly; it communicates only with the backend via HTTP APIs. The backend encapsulates all business logic, data access, and image processing. PostgreSQL is used as the primary data store for users, image jobs, and payments, while the file system (or object storage) holds the raw and processed images.
-
-### Components
-
-- Backend (FastAPI)  
-  - REST API for auth, image job management, payment, and user history.  
-  - OpenCV-based processing service for all cartoon effects.  
-  - Integration with PostgreSQL via SQLAlchemy/SQLModel.  
-
-- Database (PostgreSQL)  
-  - Stores user accounts, image processing jobs, payment records, and metadata.  
-
-- Frontend (Streamlit)  
-  - Implements pages for login/registration, image upload and processing, gallery, and dashboard.  
-  - Calls backend APIs and renders responses as UI components.
-
-## Tech Stack
-
-- Programming language: Python 3.10+  
-
-- Backend:  
-  - FastAPI  
-  - Uvicorn (ASGI server)  
-  - Pydantic v2 for request/response models  
-  - HTTPX/requests for outbound HTTP calls (e.g., payment gateway)  
-
-- Database and ORM:  
-  - PostgreSQL  
-  - SQLAlchemy 2.x (or SQLModel)  
-  - asyncpg driver  
-  - Alembic for migrations  
-
-- Image Processing:  
-  - OpenCV-Python  
-  - NumPy  
-  - Pillow (image format handling)  
-
-- Frontend/UI:  
-  - Streamlit (multi-page app)  
-
-- Auth & Security:  
-  - JWT (PyJWT or python-jose)  
-  - passlib (bcrypt)  
-  - Environment-based configuration (python-decouple / python-dotenv)  
-
-- Optional Payments:  
-  - Razorpay/Stripe (or similar) Python SDK in a payment service module  
-
-- DevOps:  
-  - Docker / docker-compose  
-  - Logging via Python logging and SQLAlchemy engine logging  
-
-## System Design
-
-### Database Schema (PostgreSQL)
-
-Suggested core tables:
-
-- users  
-  - id (UUID / integer PK)  
-  - email (unique)  
-  - password_hash  
-  - full_name  
-  - is_active  
-  - is_admin  
-  - created_at  
-  - last_login  
-
-- image_jobs  
-  - id (UUID / integer PK)  
-  - user_id (FK → users.id)  
-  - original_path (string)  
-  - output_path (string)  
-  - style (enum: CARTOON, SKETCH, COLOR_PENCIL, etc.)  
-  - params_json (JSONB)  
-  - status (QUEUED, PROCESSING, DONE, FAILED)  
-  - created_at  
-  - processed_at  
-  - error_message (nullable)  
-
-- payments (optional if a paywall is included)  
-  - id (UUID / integer PK)  
-  - user_id (FK → users.id)  
-  - job_id (FK → image_jobs.id)  
-  - amount  
-  - currency  
-  - status (PENDING, SUCCESS, FAILED)  
-  - gateway_reference  
-  - created_at  
-  - updated_at  
-
-### Backend Structure (FastAPI)
-
-Recommended project layout:
-
-- app/  
-  - main.py – app factory, router registration, middleware, CORS.  
-  - config.py – environment-based settings (DB URL, JWT secret, payment keys).  
-  - db.py – async engine, sessionmaker, database dependency.  
-  - models/  
-    - user.py  
-    - image_job.py  
-    - payment.py  
-  - schemas/  
-    - auth.py (UserCreate, Token, etc.)  
-    - image.py (ImageJobCreate, ImageJobRead, etc.)  
-    - payment.py  
-  - services/  
-    - auth.py (register, login, password hashing, token generation)  
-    - image_processing.py (OpenCV pipelines)  
-    - payments.py (gateway integration)  
-  - routers/  
-    - auth.py  
-    - images.py  
-    - payments.py  
-    - users.py  
-
-#### Core API Endpoints
-
-- Auth  
-  - POST /auth/register – create user account.  
-  - POST /auth/login – issue JWT token.  
-  - GET /users/me – get current user profile.  
-
-- Images  
-  - POST /images/transform – upload or reference an image, select style and parameters, create a processing job, trigger transformation, and return job metadata.  
-  - GET /images/{job_id} – get job status and URLs for original/processed images.  
-  - GET /images – list current user’s past jobs (for gallery/history).  
-
-- Payments (optional)  
-  - POST /payments/create – create a payment intent/order for a job.  
-  - POST /payments/webhook or /payments/confirm – handle gateway callback and mark payment as SUCCESS/FAILED.  
-
-### Image Processing (OpenCV)
-
-Implement modular functions in app/services/image_processing.py:
-
-- cartoon_effect(image, params):  
-  - Convert to grayscale.  
-  - Apply median blur.  
-  - Use adaptive threshold for edges.  
-  - Apply bilateral filter on color image.  
-  - Combine edges and filtered color image with bitwise operations to get cartoon-like output.  
-
-- pencil_sketch_effect(image, params):  
-  - Grayscale conversion.  
-  - Gaussian blur.  
-  - Invert and divide to produce sketch effect.  
-
-- color_pencil_effect(image, params):  
-  - Combine or blend color image with sketch output using tunable weights.  
-
-Parameters (blur kernel size, thresholds, bilateral filter sigma, etc.) are stored as JSON in params_json and exposed as sliders/inputs in the Streamlit UI.
-
-## Frontend (Streamlit) Design
-
-Use Streamlit as a multi-page application:
-
-1. Authentication Page  
-   - Login and registration forms.  
-   - On successful login, store JWT token in st.session_state.  
-
-2. Toonify Page (Main Processing)  
-   - Image uploader for JPG/PNG.  
-   - Dropdown to select style (Cartoon, Sketch, Color Pencil…).  
-   - Sliders for effect parameters.  
-   - Submit button that sends a request to /images/transform with token and file.  
-   - Poll /images/{job_id} until status is DONE.  
-   - Display original and processed images side-by-side.  
-   - If paywall enabled, show a “Download HD” button tied to the payment flow.  
-
-3. Gallery / Dashboard Page  
-   - Call /images to display a history of processed images with small thumbnails.  
-   - Filters by style, date range, and status.  
-   - Simple charts (e.g., number of images per style over time) using Streamlit chart components.
-
-All interactions use the backend APIs, so the UI remains thin and stateless beyond the JWT and some view state.
-
-## Setup and Installation
-
-1. Clone the repository  
-   - git clone <your-repo-url>  
-   - cd <your-repo>  
-
-2. Create and activate a virtual environment  
-   - python -m venv .venv  
-   - source .venv/bin/activate (Linux/macOS)  
-   - .venv\Scripts\activate (Windows)  
-
-3. Install dependencies  
-   - pip install -r requirements.txt  
-
-4. Configure environment variables (.env)  
-   - APP_ENV=local  
-   - DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/toonify  
-   - JWT_SECRET=your_jwt_secret  
-   - JWT_ALGORITHM=HS256  
-   - ACCESS_TOKEN_EXPIRE_MINUTES=60  
-   - PAYMENT_PROVIDER_KEY=your_key (optional)  
-
-5. Run database migrations  
-   - alembic upgrade head  
-
-6. Start backend (FastAPI)  
-   - uvicorn app.main:app --reload  
-
-7. Start frontend (Streamlit)  
-   - streamlit run streamlit_app.py  
-
-8. Access the app  
-   - Open the Streamlit URL shown in the terminal (usually http://localhost:8501).  
-
-## Usage
-
-1. Register a new user account via the Streamlit auth page.  
-2. Log in and ensure the token is stored (handled internally by Streamlit).  
-3. Navigate to the Toonify page, upload an image, choose a cartoon style and tune parameters.  
-4. Submit and wait for the processing to complete; preview the original and transformed images.  
-5. Optionally proceed through the payment flow to unlock high-resolution download (if enabled).  
-6. Explore the Gallery/Dashboard page to view and re-download previously processed images.
-
-## Testing
-
-- Unit tests for image processing functions to validate outputs and check for runtime errors.  
-- API tests for endpoints (auth, image jobs, payments) using a test database.  
-- Basic integration tests for end-to-end flow: register → login → upload → transform → list history.
-
-## Roadmap
-
-- Add additional artistic filters using more advanced OpenCV or deep learning models.  
-- Introduce background task processing for heavy jobs (Celery/RQ).  
-- Add rate limiting and quotas per user.  
-- Implement full CI/CD pipeline and cloud deployment (e.g., Docker + managed Postgres).  
-
-This README can be dropped directly into your repository as README.md and iteratively refined as the implementation evolves.
-
-[1](https://github.com/JayThibs/fastapi-streamlit-postgresql-ml-template)
-[2](https://www.evidentlyai.com/blog/fastapi-tutorial)
-[3](https://pybit.es/articles/my-experience-building-a-fastapi-streamlit-app/)
-[4](https://fastapi.tiangolo.com/project-generation/)
-[5](https://www.linkedin.com/posts/rohitanshu-dhar_learningjourney-streamlit-fastapi-activity-7360907041336397824-GckS)
-[6](https://github.com/rafaeljurkfitz/crud-fastapi-postgres-streamlit)
-[7](https://blog.devgenius.io/zero-friction-fastapi-postgres-template-2025-for-every-side-project-69d4b30f7d89)
-[8](http://codesandbox.io/p/github/DanielBodnar/readme-ai)
-[9](https://pypi.org/project/readmeai/0.5.2/)
+The application transforms real-world images into effects such as:
+
+Cartoon Effect
+
+Pencil Sketch
+
+Color Pencil/Artistic Stylization
+
+Advanced Edge+Color Fusion Methods
+
+Users can view a side-by-side comparison of Original vs Transformed Image, and download only after successful payment.
+
+2. Core Outcomes
+
+A robust backend API handling auth, image jobs, payment validation, and file storage.
+
+A Streamlit-based interactive UI with friendly workflow for uploading, previewing, and transforming images.
+
+A highly optimized OpenCV cartoonization pipeline supporting multiple styles.
+
+A secure user login/registration system with JWT authentication.
+
+A payment-locked download system where image access is given only after verified payment.
+
+Fully documented, testable, maintainable code following industry standards.
+
+3. High-Level Architecture (Text Description)
+Frontend – Streamlit
+
+User authentication UI (login, signup, forgot password)
+
+Image upload & preview
+
+Style selection
+
+Display cartoon results + side-by-side comparison
+
+Initiate and verify payment
+
+Allow download after backend approval
+
+Backend – FastAPI
+
+Auth routes (JWT-based)
+
+Image processing API
+
+Asynchronous processing pipeline
+
+Endpoints for uploading, transforming, and retrieving image jobs
+
+Payment verification endpoint
+
+PostgreSQL queries using SQLAlchemy
+
+Error & exception handling
+
+Database – PostgreSQL
+
+users table
+
+image_jobs table
+
+payments table
+
+audit_logs (optional future enhancement)
+
+Full referential integrity + indexing
+
+Image Storage
+
+Local storage or S3-compatible bucket for uploaded & processed images
+
+Access via signed URLs
+
+4. Detailed Project Modules
+Module 1: User Authentication & Registration (Week 1–2)
+
+Secure user registration with hashed passwords
+
+JWT-based login, refresh tokens
+
+Validation for email format, password strength
+
+Database schema for user accounts
+
+Rate-limiting & brute-force protection
+
+Proper error messages & UX optimization
+
+Module 2: Image Processing with OpenCV (Week 3–4)
+
+Implement a cartoonization engine with:
+
+Techniques
+
+Bilateral Filtering
+
+Edge Detection (Canny or Adaptive Thresholding)
+
+Color Quantization (K-means or manual binning)
+
+Blend edges + quantized colors
+
+Pencil Sketch (grayscale inversion + Gaussian blur + dodge blend)
+
+Color Pencil (stylization + enhanced edges)
+
+Pipeline Requirements
+
+Handle large images efficiently
+
+Output high-resolution processed images
+
+3–5 preset cartoon styles
+
+Side-by-side comparison generation
+
+Allow download preview but restrict final download until payment
+
+Module 3: UI Development & Payment Integration (Week 5–6)
+Frontend
+
+Minimalist theme, fast UX
+
+Drag-and-drop upload
+
+Real-time preview
+
+Loading indicators during processing
+
+Responsive layout
+
+Payment Workflow
+
+User uploads → selects style → sees preview
+
+Click on Download → payment gateway opens
+
+Backend validates payment
+
+If valid → generate signed URL → allow download
+
+Backends Supported
+
+Razorpay
+
+Stripe
+
+Module 4: Testing, Review & Documentation (Week 7–8)
+Testing
+
+Unit tests for backend endpoints
+
+Integration tests for OpenCV pipeline
+
+UI validation tests
+
+Payment verification mock tests
+
+Load testing for image processing
+
+Documentation
+
+API documentation (OpenAPI Auto-generation)
+
+Developer documentation detailing pipeline logic
+
+Instructions for setup, testing, environment variables
+
+Future roadmap & scalability notes
+
+5. Tech Stack (Finalized)
+Frontend
+
+Streamlit
+
+Streamlit Components (for image previews & comparison slider)
+
+Backend
+
+FastAPI
+
+Pydantic
+
+SQLAlchemy
+
+Passlib (password hashing)
+
+JWT Authentication
+
+Image Processing
+
+OpenCV
+
+NumPy
+
+Database
+
+PostgreSQL
+
+Alembic (migrations)
+
+Payments
+
+Razorpay or Stripe SDK
+
+Cloud/Storage
+
+Local FS (development)
+
+AWS S3 / DigitalOcean Spaces (production-ready structure)
+
+6. Project Folder Structure (Industry Standard)
+project-root/
+│
+├── backend/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── routers/
+│   │   ├── models/
+│   │   ├── schemas/
+│   │   ├── services/
+│   │   ├── core/ (auth, security, settings)
+│   │   ├── utils/
+│   │   ├── image_processing/
+│   │   └── payments/
+│   ├── migrations/
+│   └── requirements.txt
+│
+├── frontend/
+│   ├── streamlit_app.py
+│   ├── components/
+│   └── assets/
+│
+├── storage/
+│   ├── uploads/
+│   ├── processed/
+│
+├── docs/
+└── README.md
+
+7. API Endpoints Overview
+Auth
+
+POST /auth/signup
+
+POST /auth/login
+
+GET /auth/me
+
+Images
+
+POST /images/upload
+
+POST /images/process
+
+GET /images/{job_id}
+
+GET /images/download/{job_id} (payment required)
+
+Payments
+
+POST /payments/create-order
+
+POST /payments/verify
+
+8. Deployment (Without Docker/CI/CD for Now)
+
+Include instructions for:
+
+Running backend using Uvicorn
+
+Running Streamlit frontend
+
+Connecting to local/Postgres cloud DB
+
+Setting environment variables
+
+Production settings best practices

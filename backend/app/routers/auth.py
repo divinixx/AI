@@ -1,98 +1,130 @@
 """
-Authentication router.
-Handles user registration, login, and token refresh endpoints.
+Authentication routes
 """
-
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.orm import Session
 
-from app.db import get_db
-from app.schemas.auth import UserCreate, UserLogin, UserResponse, Token
-from app.services.auth import (
-    register_user,
-    authenticate_user,
-    create_tokens,
-    decode_token,
-    get_user_by_uuid,
-    create_access_token
+from app.database import get_db
+from app.schemas.user import (
+    UserCreate,
+    UserLogin,
+    UserResponse,
+    TokenResponse,
+    TokenRefresh,
+    PasswordChange,
+    MessageResponse,
 )
+from app.services.auth_service import auth_service
+from app.core.security import get_current_user
+from app.models.user import User
 
-router = APIRouter()
+router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(
-    user_data: UserCreate,
-    db: AsyncSession = Depends(get_db)
-):
+@router.post("/signup", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
     """
-    Register a new user account.
+    Register a new user account
     
-    - **email**: Valid email address (must be unique)
-    - **password**: Password (minimum 8 characters)
+    - **email**: Valid email address
+    - **username**: Alphanumeric username (3-50 chars)
+    - **password**: Strong password (8+ chars, uppercase, lowercase, digit, special char)
     - **full_name**: Optional full name
     """
-    user = await register_user(db, user_data)
-    return user
+    user = auth_service.create_user(db, user_data)
+    tokens = auth_service.generate_tokens(user)
+    
+    return TokenResponse(
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        token_type=tokens["token_type"],
+        user=UserResponse.model_validate(user)
+    )
 
 
-@router.post("/login", response_model=Token)
-async def login(
-    credentials: UserLogin,
-    db: AsyncSession = Depends(get_db)
+@router.post("/login", response_model=TokenResponse)
+async def login(login_data: UserLogin, db: Session = Depends(get_db)):
+    """
+    Login with username/email and password
+    
+    Returns access and refresh tokens
+    """
+    user = auth_service.authenticate_user(db, login_data)
+    tokens = auth_service.generate_tokens(user)
+    
+    return TokenResponse(
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        token_type=tokens["token_type"],
+        user=UserResponse.model_validate(user)
+    )
+
+
+@router.post("/login/form", response_model=TokenResponse)
+async def login_form(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
 ):
     """
-    Authenticate user and return JWT tokens.
-    
-    - **email**: Registered email address
-    - **password**: Account password
-    
-    Returns access token and refresh token.
+    OAuth2 compatible login endpoint (for Swagger UI)
     """
-    user = await authenticate_user(db, credentials.email, credentials.password)
+    login_data = UserLogin(username=form_data.username, password=form_data.password)
+    user = auth_service.authenticate_user(db, login_data)
+    tokens = auth_service.generate_tokens(user)
     
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is disabled"
-        )
-    
-    return create_tokens(user)
+    return TokenResponse(
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        token_type=tokens["token_type"],
+        user=UserResponse.model_validate(user)
+    )
 
 
-@router.post("/refresh", response_model=Token)
-async def refresh_token(
-    refresh_token: str,
-    db: AsyncSession = Depends(get_db)
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(token_data: TokenRefresh, db: Session = Depends(get_db)):
+    """
+    Refresh access token using refresh token
+    """
+    tokens = auth_service.refresh_tokens(db, token_data.refresh_token)
+    
+    # Get user for response
+    from app.core.security import decode_token
+    payload = decode_token(tokens["access_token"])
+    user = auth_service.get_user_by_id(db, int(payload.get("sub")))
+    
+    return TokenResponse(
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        token_type=tokens["token_type"],
+        user=UserResponse.model_validate(user)
+    )
+
+
+@router.get("/me", response_model=UserResponse)
+async def get_current_user_info(current_user: User = Depends(get_current_user)):
+    """
+    Get current authenticated user's profile
+    """
+    return UserResponse.model_validate(current_user)
+
+
+@router.post("/change-password", response_model=MessageResponse)
+async def change_password(
+    password_data: PasswordChange,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
-    Refresh access token using refresh token.
+    Change current user's password
     
-    - **refresh_token**: Valid refresh token
-    
-    Returns new access and refresh tokens.
+    Requires current password for verification
     """
-    payload = decode_token(refresh_token)
+    auth_service.change_password(
+        db,
+        current_user,
+        password_data.old_password,
+        password_data.new_password
+    )
     
-    if payload.type != "refresh":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid token type"
-        )
-    
-    user = await get_user_by_uuid(db, payload.sub)
-    
-    if not user or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found or inactive"
-        )
-    
-    return create_tokens(user)
+    return MessageResponse(message="Password changed successfully")

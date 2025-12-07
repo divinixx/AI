@@ -1,57 +1,61 @@
 """
-Main FastAPI application entry point.
-Handles app factory, router registration, middleware, and CORS configuration.
+Toonify - AI Image Transformation API
+FastAPI Main Application
 """
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
+from fastapi.staticfiles import StaticFiles
 
-from app.config import settings
-from app.db import init_db
-from app.routers import auth, images, payments, users
+from app.core.config import settings
+from app.database import init_db
+from app.routers.auth import router as auth_router
+from app.routers.images import router as images_router
 
+# Create FastAPI app
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="AI-based Image Transformation Tool for Cartoon Effect Generation",
+    version=settings.APP_VERSION,
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan handler for startup and shutdown events."""
-    # Startup
-    await init_db()
-    yield
-    # Shutdown
-    pass
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# Include routers
+app.include_router(auth_router)
+app.include_router(images_router)
 
-def create_app() -> FastAPI:
-    """Application factory function."""
-    app = FastAPI(
-        title="AI Image Transformation API",
-        description="Transform images into cartoon-style effects using OpenCV",
-        version="1.0.0",
-        lifespan=lifespan,
-    )
-
-    # Configure CORS
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.CORS_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # Register routers
-    app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
-    app.include_router(users.router, prefix="/users", tags=["Users"])
-    app.include_router(images.router, prefix="/images", tags=["Images"])
-    app.include_router(payments.router, prefix="/payments", tags=["Payments"])
-
-    @app.get("/", tags=["Health"])
-    async def root():
-        """Health check endpoint."""
-        return {"status": "healthy", "message": "AI Image Transformation API"}
-
-    return app
+# Mount static files for serving images
+app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
+app.mount("/processed", StaticFiles(directory=settings.PROCESSED_DIR), name="processed")
 
 
-app = create_app()
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup"""
+    init_db()
+
+
+@app.get("/", tags=["Root"])
+async def root():
+    """Root endpoint"""
+    return {
+        "name": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "docs": "/docs",
+        "status": "running"
+    }
+
+
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy"}

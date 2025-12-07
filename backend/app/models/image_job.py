@@ -1,67 +1,55 @@
 """
-Image Job database model.
-Handles image processing jobs, status tracking, and file references.
+Image Job model for tracking image processing tasks
 """
-
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, Enum, Text, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Enum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
-import uuid
 
-from app.db import Base
+from app.database import Base
 
 
 class ImageStyle(str, enum.Enum):
-    """Available cartoon effect styles."""
     CARTOON = "cartoon"
-    SKETCH = "sketch"
+    PENCIL_SKETCH = "pencil_sketch"
     COLOR_PENCIL = "color_pencil"
-    OIL_PAINTING = "oil_painting"
+    EDGE_PRESERVE = "edge_preserve"
     WATERCOLOR = "watercolor"
-    POP_ART = "pop_art"
 
 
 class JobStatus(str, enum.Enum):
-    """Image processing job status."""
-    QUEUED = "queued"
+    PENDING = "pending"
     PROCESSING = "processing"
-    DONE = "done"
+    COMPLETED = "completed"
     FAILED = "failed"
 
 
 class ImageJob(Base):
-    """Image processing job model."""
-    
     __tablename__ = "image_jobs"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    uuid = Column(String(36), unique=True, default=lambda: str(uuid.uuid4()), nullable=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     
-    # File paths
+    # File information
     original_filename = Column(String(255), nullable=False)
-    original_path = Column(String(512), nullable=False)
-    output_path = Column(String(512), nullable=True)
+    original_path = Column(String(500), nullable=False)
+    processed_path = Column(String(500), nullable=True)
+    comparison_path = Column(String(500), nullable=True)
     
     # Processing details
-    style = Column(Enum(ImageStyle), nullable=False)
-    params_json = Column(JSON, nullable=True)
-    
-    # Status tracking
-    status = Column(Enum(JobStatus), default=JobStatus.QUEUED, nullable=False)
+    style = Column(String(50), default=ImageStyle.CARTOON.value)
+    status = Column(String(50), default=JobStatus.PENDING.value)
     error_message = Column(Text, nullable=True)
     
-    # Timestamps
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    processed_at = Column(DateTime(timezone=True), nullable=True)
+    # Download tracking
+    download_count = Column(Integer, default=0)
     
-    # HD download
-    is_hd_unlocked = Column(String(1), default="N", nullable=False)
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    processed_at = Column(DateTime(timezone=True), nullable=True)
     
     # Relationships
     user = relationship("User", back_populates="image_jobs")
-    payment = relationship("Payment", back_populates="image_job", uselist=False)
     
     def __repr__(self):
-        return f"<ImageJob(id={self.id}, style={self.style}, status={self.status})>"
+        return f"<ImageJob(id={self.id}, user_id={self.user_id}, status={self.status})>"

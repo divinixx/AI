@@ -1,100 +1,69 @@
 """
-Image processing schemas.
-Pydantic models for image upload, transformation, and job responses.
+Pydantic schemas for Image processing
 """
-
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any, List
+from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
 
 class ImageStyleEnum(str, Enum):
-    """Available image transformation styles."""
     CARTOON = "cartoon"
-    SKETCH = "sketch"
+    PENCIL_SKETCH = "pencil_sketch"
     COLOR_PENCIL = "color_pencil"
-    OIL_PAINTING = "oil_painting"
+    EDGE_PRESERVE = "edge_preserve"
     WATERCOLOR = "watercolor"
-    POP_ART = "pop_art"
 
 
 class JobStatusEnum(str, Enum):
-    """Image job status values."""
-    QUEUED = "queued"
+    PENDING = "pending"
     PROCESSING = "processing"
-    DONE = "done"
+    COMPLETED = "completed"
     FAILED = "failed"
 
 
-class CartoonParams(BaseModel):
-    """Parameters for cartoon effect."""
-    blur_kernel_size: int = Field(default=7, ge=3, le=21, description="Must be odd number")
-    threshold_block_size: int = Field(default=9, ge=3, le=21, description="Must be odd number")
-    threshold_c: int = Field(default=9, ge=1, le=20)
-    bilateral_d: int = Field(default=9, ge=5, le=15)
-    bilateral_sigma_color: int = Field(default=200, ge=50, le=300)
-    bilateral_sigma_space: int = Field(default=200, ge=50, le=300)
-
-
-class SketchParams(BaseModel):
-    """Parameters for pencil sketch effect."""
-    blur_kernel_size: int = Field(default=21, ge=3, le=51, description="Must be odd number")
-    invert: bool = Field(default=True)
-
-
-class ColorPencilParams(BaseModel):
-    """Parameters for color pencil effect."""
-    sketch_weight: float = Field(default=0.7, ge=0.0, le=1.0)
-    color_weight: float = Field(default=0.3, ge=0.0, le=1.0)
-    blur_kernel_size: int = Field(default=21, ge=3, le=51)
-
-
-class ImageTransformRequest(BaseModel):
-    """Schema for image transformation request."""
-    style: ImageStyleEnum
-    params: Optional[Dict[str, Any]] = Field(default=None, description="Style-specific parameters")
-
-
-class ImageJobCreate(BaseModel):
-    """Schema for creating an image job (internal use)."""
-    original_filename: str
-    original_path: str
-    style: ImageStyleEnum
-    params_json: Optional[Dict[str, Any]] = None
+class ImageProcessRequest(BaseModel):
+    style: ImageStyleEnum = ImageStyleEnum.CARTOON
 
 
 class ImageJobResponse(BaseModel):
-    """Schema for image job response."""
     id: int
-    uuid: str
     original_filename: str
-    style: ImageStyleEnum
-    status: JobStatusEnum
-    params_json: Optional[Dict[str, Any]]
-    original_url: Optional[str] = None
-    output_url: Optional[str] = None
-    is_hd_unlocked: bool = False
-    error_message: Optional[str] = None
+    style: str
+    status: str
     created_at: datetime
-    processed_at: Optional[datetime]
+    processed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
     
     class Config:
         from_attributes = True
 
 
-class ImageJobListResponse(BaseModel):
-    """Schema for paginated image job list."""
-    items: List[ImageJobResponse]
+class ImageJobDetailResponse(ImageJobResponse):
+    original_url: str
+    processed_url: Optional[str] = None
+    comparison_url: Optional[str] = None
+    download_count: int = 0
+
+
+class ImageUploadResponse(BaseModel):
+    job_id: int
+    message: str
+    original_url: str
+
+
+class ImageListResponse(BaseModel):
+    jobs: List[ImageJobResponse]
     total: int
     page: int
-    page_size: int
-    total_pages: int
+    per_page: int
 
 
-class ImageJobFilter(BaseModel):
-    """Schema for filtering image jobs."""
-    style: Optional[ImageStyleEnum] = None
-    status: Optional[JobStatusEnum] = None
-    date_from: Optional[datetime] = None
-    date_to: Optional[datetime] = None
+class StyleInfo(BaseModel):
+    name: str
+    value: str
+    description: str
+
+
+class StylesListResponse(BaseModel):
+    styles: List[StyleInfo]

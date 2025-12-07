@@ -1,1 +1,1 @@
-# API Schemas Module
+# Schemas Package
