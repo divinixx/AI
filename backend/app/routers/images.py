@@ -123,10 +123,11 @@ async def process_image(
         job.style = style.value
         db.commit()
     
-    # Process in background
+    # Process in background using the DATABASE_URL from settings
+    from app.core.config import settings
     background_tasks.add_task(
         process_image_task,
-        db_url=str(db.bind.url),
+        db_url=settings.DATABASE_URL,
         job_id=job.id
     )
     
@@ -141,15 +142,23 @@ def process_image_task(db_url: str, job_id: int):
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from app.models.image_job import ImageJob
+    import logging
     
-    engine = create_engine(db_url)
-    SessionLocal = sessionmaker(bind=engine)
-    db = SessionLocal()
+    logger = logging.getLogger(__name__)
     
     try:
+        # Create new engine and session for background task
+        engine = create_engine(db_url, pool_pre_ping=True)
+        SessionLocal = sessionmaker(bind=engine)
+        db = SessionLocal()
+        
         job = db.query(ImageJob).filter(ImageJob.id == job_id).first()
         if not job:
+            logger.error(f"Job {job_id} not found")
+            db.close()
             return
+        
+        logger.info(f"Starting processing for job {job_id} with style {job.style}")
         
         processor = ImageProcessor()
         
@@ -159,6 +168,8 @@ def process_image_task(db_url: str, job_id: int):
             style=job.style
         )
         
+        logger.info(f"Processing completed for job {job_id}")
+        
         # Update job with results
         job.processed_path = processed_path
         job.comparison_path = comparison_path
@@ -167,12 +178,22 @@ def process_image_task(db_url: str, job_id: int):
         job.processed_at = datetime.utcnow()
         db.commit()
         
+        logger.info(f"Job {job_id} marked as completed")
+        
     except Exception as e:
-        job.status = JobStatus.FAILED.value
-        job.error_message = str(e)
-        db.commit()
+        logger.error(f"Error processing job {job_id}: {str(e)}", exc_info=True)
+        try:
+            if job:
+                job.status = JobStatus.FAILED.value
+                job.error_message = str(e)
+                db.commit()
+        except:
+            pass
     finally:
-        db.close()
+        try:
+            db.close()
+        except:
+            pass
 
 
 @router.get("/{job_id}", response_model=ImageJobDetailResponse)
